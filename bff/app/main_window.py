@@ -1,11 +1,13 @@
 import sys
 import enum
+from typing import Callable
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import Qt, QEvent, QObject, QPoint
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
+    QStackedWidget,
     QToolBar,
     QLabel,
     QDockWidget,
@@ -23,187 +25,178 @@ from bff.app.icons import Icons
 app = QApplication(sys.argv)
 
 
+class Exceptions:
+    class ViewAlreadyRegistered(Exception):
+        def __init__(self, view_name:str) -> None:
+            super().__init__(f"A View with the name '{view_name}' is already registered")
+
+
+class DefaultViews(enum.Enum):
+    HOME = "/home"
+    SETTINGS = "/settings"
+    USERS = "/users"
+    ABOUT = "/about"
+
+
+class _404View(QWidget):
+    pass
+
+
+class AboutView(QWidget):
+    pass
+
+
 class NavBar(QDockWidget):
-    def __init__(self, parent:QMainWindow):
+    def __init__(self, parent:QMainWindow, show_view:Callable[[str], None]):
         super().__init__(None, parent)
-        self.main_window:QMainWindow = parent
+        self.__show_view__: Callable[[str], None] = show_view
         self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
         self.setTitleBarWidget(QWidget())
         self.setFixedWidth(300)
-        # List of pages
-        self.list_widget = QListWidget()
-        self.setWidget(self.list_widget)
-        # TODO remove these Dummy items
-        item = QListWidgetItem("some item")
-        set_widget_icon("home", item)
-        item2 = QListWidgetItem("some item2")
-        item3 = QListWidgetItem("some item3")
-        item4 = QListWidgetItem("some item4")
-        self.list_widget.addItem(item)
-        self.list_widget.addItem(item2)
-        self.list_widget.addItem(item3)
-        self.list_widget.addItem(item4)
-        # Connect clicks to page change
-        self.list_widget.itemClicked.connect(self.on_item_clicked)
+        self.items = QListWidget()
+        self.items.itemClicked.connect(self.on_item_clicked)
+        self.setWidget(self.items)
 
-    def register_page(self, name: str, widget: QWidget):
-        """
-        Register a new page with the NavBar.
-        """
+    def register_item(self, name: str, icon:str):
         item = QListWidgetItem(name)
-        item.setData(Qt.ItemDataRole.UserRole, widget)
-        self.list_widget.addItem(item)
+        set_widget_icon(icon, item)
+        self.items.addItem(item)
 
     def on_item_clicked(self, item: QListWidgetItem):
-        """
-        Load the selected page into the central widget area.
-        """
-        page_widget = item.data(Qt.ItemDataRole.UserRole)
-        self.main_window.setCentralWidget(page_widget)
-        # self.parent().update_page_label(item.text())
+        self.__show_view__(item.text())
 
 
 class BFF(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.__views__:dict[str, QWidget] = {}
         self.__theme__:Theme = Theme.LIGHT
+        self.__views_stack__ = QStackedWidget()
+        self.__views_stack__.addWidget(_404View())
         apply_theme(app, theme=Theme.LIGHT)
-        self.setWindowTitle("BFF")
+        self.setWindowTitle(f"BFF - {sys.modules["__main__"].__file__.split('\\')[-1]}") #type:ignore
         self.setWindowIcon(QIcon(get_icon(Icons.ROBOT.value)))
         self.resize(800, 600)
-        # apply_stylesheet(app, theme=Theme.LIGHT.value, invert_secondary=True)
-
+        self.setCentralWidget(self.__views_stack__)
         # Initialize the toolbar
-        self.toolbar = QToolBar("Main Toolbar")
-        self.toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
-
+        self.__toolbar__ = QToolBar("Main Toolbar")
+        self.__toolbar__.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.__toolbar__)
         self.__setup_toolbar__()
-
-        self.nav_bar = NavBar(self)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.nav_bar)
-        self.nav_bar.setVisible(False)
-
+        # Initialize the Navigation Bar
+        self.__nav_bar__ = NavBar(self, self.show_view)
+        self.__nav_bar__.setVisible(False)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.__nav_bar__)
+        # start eventlistener on the page
         self.installEventFilter(self)
 
     def __setup_toolbar__(self):
         """Configures the toolbar."""
         # toggle navbar button
         toggle_navbar = QAction(self)
-        # toggle_navbar.setIcon(get_icon("menu", toggle_navbar))
         set_widget_icon(Icons.MENU.value, toggle_navbar)
-        # toggle_navbar.setIcon(get_icon("menu"))
         toggle_navbar.setToolTip("Toggle Navigation Bar")
-        toggle_navbar.triggered.connect(self.on_toggle_navbar_clicked)
-        self.toolbar.addAction(toggle_navbar)
+        toggle_navbar.triggered.connect(self.toggle_navbar_visibility)
+        self.__toolbar__.addAction(toggle_navbar)
         # current page name
-        route_name = QLabel(self)
-        route_name.setText("/home")
-        route_name.setToolTip("Currently selected View")
-        self.toolbar.addWidget(route_name)
-        # this spacer is used to allign other buttons to the right
+        view_name = QLabel(self)
+        view_name.setText("/home")
+        view_name.setToolTip("Currently selected View")
+        self.__toolbar__.addWidget(view_name)
+        # spacer is used to allign other buttons to the right
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.toolbar.addWidget(spacer)
+        self.__toolbar__.addWidget(spacer)
         # start/stop button
-        self.start_button = QAction(self)
-        # self.start_button.setIcon(get_icon("play", self.start_button))
-        set_widget_icon(Icons.PLAY.value, self.start_button)
-        self.start_button.setCheckable(True)
-        self.start_button.setToolTip("Start Measurement")
-        self.start_button.triggered.connect(self.on_toggle_measurement_clicked)
-        self.toolbar.addAction(self.start_button)
+        self.start_stop_button = QAction(self)
+        set_widget_icon(Icons.PLAY.value, self.start_stop_button)
+        self.start_stop_button.setCheckable(True)
+        self.start_stop_button.setToolTip("Start Measurement")
+        self.start_stop_button.triggered.connect(self.on_start_stop_automatic)
+        self.__toolbar__.addAction(self.start_stop_button)
         # home button
         home_button = QAction(self)
-        # home_button.setIcon(get_icon("home", home_button))
         set_widget_icon(Icons.HOME.value, home_button)
         home_button.setToolTip("Show Home View")
-        home_button.triggered.connect(self.on_show_home_clicked)
-        self.toolbar.addAction(home_button)
+        home_button.triggered.connect(lambda: self.show_view(name=DefaultViews.HOME.value))
+        self.__toolbar__.addAction(home_button)
         # setup button
-        config_button = QAction(self)
-        set_widget_icon(Icons.SETTINGS.value, config_button)
-        # config_button.setIcon(get_icon("settings", config_button))
-        config_button.setToolTip("Show Config View")
-        config_button.triggered.connect(self.on_config_clicked)
-        self.toolbar.addAction(config_button)
+        settings_button = QAction(self)
+        set_widget_icon(Icons.SETTINGS.value, settings_button)
+        settings_button.setToolTip("Show Settings View")
+        settings_button.triggered.connect(lambda: self.show_view(name=DefaultViews.SETTINGS.value))
+        self.__toolbar__.addAction(settings_button)
         # user manager button
         user_manager = QAction(self)
         set_widget_icon(Icons.PERSON.value, user_manager)
-        # user_manager.setIcon(get_icon("person", user_manager))
         user_manager.setToolTip("Show User Manager")
-        self.toolbar.addAction(user_manager)
-
+        user_manager.triggered.connect(lambda: self.show_view(name=DefaultViews.USERS.value))
+        self.__toolbar__.addAction(user_manager)
         # change theme
-        self.change_theme = QAction(self)
+        self.btn_change_theme = QAction(self)
         if self.__theme__ == Theme.LIGHT:
-            set_widget_icon(Icons.DARK_MODE.value, self.change_theme)
-            # self.change_theme.setIcon(get_icon("dark_mode", self.change_theme))
-            self.change_theme.setToolTip("Switch To Dark Mode")
+            set_widget_icon(Icons.DARK_MODE.value, self.btn_change_theme)
+            self.btn_change_theme.setToolTip("Switch To Dark Mode")
         else:
-            set_widget_icon(Icons.LIGHT_MODE.value, self.change_theme)
-            # self.change_theme.setIcon(get_icon("light_mode", self.change_theme))
-            self.change_theme.setToolTip("Switch To Light Mode")
-        self.change_theme.triggered.connect(self.on_change_theme_clicked)
-        self.toolbar.addAction(self.change_theme)
+            set_widget_icon(Icons.LIGHT_MODE.value, self.btn_change_theme)
+            self.btn_change_theme.setToolTip("Switch To Light Mode")
+        self.btn_change_theme.triggered.connect(self.on_change_theme_clicked)
+        self.__toolbar__.addAction(self.btn_change_theme)
         # info
         about_button = QAction(self)
         set_widget_icon(Icons.INFO.value, about_button)
-        # about_button.setIcon(get_icon("info", about_button))
         about_button.setToolTip("About The Project")
-        about_button.triggered.connect(self.on_about_button_clicked)
-        self.toolbar.addAction(about_button)
+        about_button.triggered.connect(lambda: self.show_view(name=DefaultViews.ABOUT.value))
+        self.__toolbar__.addAction(about_button)
 
-    def on_about_button_clicked(self):
-        print("show about button")
+    def toggle_navbar_visibility(self, val):
+        self.__nav_bar__.setVisible(not self.__nav_bar__.isVisible())
 
-    def on_toggle_navbar_clicked(self, val):
-        self.nav_bar.setVisible(not self.nav_bar.isVisible())
-
-    def on_toggle_measurement_clicked(self, val):
+    def on_start_stop_automatic(self, val):
         if val:
-            print("start measurement")
-            set_widget_icon(Icons.STOP.value, self.start_button)
-            self.start_button.setToolTip("Stop Measurement")
-            # self.start_button.setIcon(get_icon(Icons.STOP.value, self.start_button))
+            set_widget_icon(icon_name=Icons.STOP.value, widget=self.start_stop_button)
+            self.start_stop_button.setToolTip("Stop Measurement")
         else:
-            set_widget_icon(Icons.PLAY.value, self.start_button)
-            self.start_button.setToolTip("Start Measurement")
-            # self.start_button.setIcon(get_icon(Icons.PLAY.value, self.start_button))
-            print("stop measurement")
+            set_widget_icon(icon_name=Icons.PLAY.value, widget=self.start_stop_button)
+            self.start_stop_button.setToolTip("Start Measurement")
 
-    def on_show_home_clicked(self):
-        print("Show Home")
-
-    def on_config_clicked(self):
-        print ("config")
-
-    def on_change_theme_clicked(self, val):
-        icon:str
-        tooltip:str
+    def on_change_theme_clicked(self):
         if self.__theme__ == Theme.LIGHT:
             icon, self.__theme__, tooltip = "light_mode", Theme.DARK, "Switch To Light Mode"
         else:
             icon, self.__theme__, tooltip = "dark_mode", Theme.LIGHT, "Switch To Dark Mode"
-        set_widget_icon(icon, self.change_theme)
-        # self.change_theme.setIcon(get_icon(icon, self.change_theme))
-        self.change_theme.setToolTip(tooltip)
+        set_widget_icon(icon_name=icon, widget=self.btn_change_theme)
+        self.btn_change_theme.setToolTip(tooltip)
         apply_theme(app, theme=self.__theme__)
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+    def register_view(self, name:str, widget:QWidget, icon:str = Icons.ROBOT.value):
+        if name in self.__views__.keys():
+            raise Exceptions.ViewAlreadyRegistered(name)
+        self.__views__[name] = widget
+        self.__views_stack__.addWidget(self.__views__[name])
+        self.__nav_bar__.register_item(name, icon)
+
+    def show_view(self, name:str):
+        widget: QWidget | None = self.__views__.get(name, None)
+        if widget:
+            idx: int = self.__views_stack__.indexOf(widget)
+            self.__views_stack__.setCurrentIndex(idx)
+            return
+        self.__views_stack__.setCurrentIndex(0)
+
+    def eventFilter(self, object: QObject, event: QEvent) -> bool: # type:ignore
         """
         Hide NavBar if user clicks outside it.
         """
         if event.type() == QEvent.Type.MouseButtonPress:
-            if self.nav_bar.isVisible():
+            if self.__nav_bar__.isVisible():
                 # Get mouse position relative to NavBar
-                pos = self.nav_bar.mapFromGlobal(event.globalPosition().toPoint())
-
-                if not self.nav_bar.rect().contains(pos):
+                pos = self.__nav_bar__.mapFromGlobal(event.globalPosition().toPoint()) #type:ignore
+                if not self.__nav_bar__.rect().contains(pos):
                     # Click is outside NavBar -> hide it
-                    self.nav_bar.setVisible(False)
-        return super().eventFilter(obj, event)
+                    self.__nav_bar__.setVisible(False)
+        return super().eventFilter(object, event)
 
     def run(self):
         self.show()
