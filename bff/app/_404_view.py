@@ -7,11 +7,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from bff.app import DefaultViews
+
 
 class _404View(QWidget):
     def __init__(self):
         super().__init__()
-        face = QLabel("(˚Δ˚)b")
+        face = QLabel(DefaultViews._404.value)
         face.setAlignment(Qt.AlignmentFlag.AlignCenter)
         face.setStyleSheet("font-size: 48px;")
         label = QLabel("404 - it's lonely here")

@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
-from bff.app.config import Config
-from bff.app.theming import set_widget_icon
+from bff.app.types import Config
+from bff.app import set_widget_icon
 
 class AboutView(QWidget):
     def __init__(self):
@@ -20,6 +20,12 @@ class AboutView(QWidget):
         self.setLayout(main_layout)
         # --- Markdown Viewer (QTextBrowser) ---
         self.text_browser = QTextBrowser()
+        self.text_browser.setStyleSheet("""
+            QTextBrowser {
+                border: none;
+                background: transparent;
+            }
+        """)
         self.text_browser.setOpenExternalLinks(True)  # Make links clickable
         # Convert Markdown to HTML
         markdown_text = sys.modules["__main__"].__doc__ if sys.modules["__main__"].__doc__ else """ - """
@@ -55,6 +61,7 @@ class AboutView(QWidget):
         button_layout.addStretch()
 
         # --- Assemble layouts ---
+        main_layout.addStretch(1)
         main_layout.addWidget(self.text_browser, 3)   # Markdown view
         main_layout.addLayout(button_layout, 1)       # Buttons
 

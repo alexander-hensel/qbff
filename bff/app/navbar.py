@@ -6,12 +6,24 @@ from PyQt6.QtWidgets import (
     QMainWindow
 )
 from PyQt6.QtCore import Qt
-from bff.app.theming import set_widget_icon
-from typing import Callable
+from bff.app import set_widget_icon
+from collections.abc import Callable
 
 class NavBar(QDockWidget):
     def __init__(self, parent:QMainWindow, show_view:Callable[[str], None]):
         super().__init__(None, parent)
+        self.setStyleSheet("""
+            QDockWidget {
+                background: transparent;
+            }
+            QDockWidget QWidget {
+                background: transparent;
+            }
+            QListWidget {
+                background: transparent;
+                border: none;
+            }
+        """)
         self.__show_view__: Callable[[str], None] = show_view
         self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
