@@ -20,12 +20,12 @@ This **supports**:
 from cgitb import text
 import sys
 import os
-
+from turtle import update
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', )))
 print(sys.path)
 
 from PyQt6.QtWidgets import QPushButton, QApplication, QWidget, QVBoxLayout, QLabel
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 import bff.app
 from bff.app.icons import Icons
 from bff.app.types import Config
@@ -36,17 +36,24 @@ import time
 
 Config.app_name = "BFF Test App"
 
-app = bff.app.BFF()
+app = bff.app.instance
+
+
+class TextUpdater(QObject):
+    update_text = pyqtSignal(str)
 
 
 button = QPushButton()
 button.setText("button1")
 button.setCheckable(True)
-# button.setFlat(True)
 button2 = QPushButton()
 button2.setText("Button2")
 text = QLabel()
 text.setText("Hello World")
+
+
+updater = TextUpdater()
+updater.update_text.connect(text.setText)
 
 
 app.register_view(name=f"myView", widget=button, icon="coffee")
@@ -60,26 +67,40 @@ def on_startup():
     # app.show_view("myView")
 
 
+@app.register_on_shutdown
+def on_shutdown():
+    print("Shutting down")
+
+
 @app.register_on_start_measurement
 def start_measurement():
     print("Measurement started")
+
 
 @app.register_on_stop_measurement
 def stop_measurement():
     print("Measurement stopped")
 
+
 @app.register_background_task
 def task() -> None:
     while True:
-        print(f"task running: {time.time()}")
-        # time.sleep(0.0002)
+        updater.update_text.emit(f"Hello Background {time.time()}")
+        time.sleep(0.1)
+
 
 @app.register_measurement_task
-def second_task():
+def measurement_task():
     while True:
-        print(f"measurement task is also runnig {time.time()}")
-        text.setText(f"Hello World {time.time()}")
-        time.sleep(0.0002)
+        updater.update_text.emit(f"Hello Measurement Task {time.time()}")
+        time.sleep(0.1)
+
+
+@app.register_measurement_task
+def measurement_task2():
+    time.sleep(10)
+    app.stop_measurement()
+
 
 app.run()
 # app.show()

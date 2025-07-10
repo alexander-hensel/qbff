@@ -1,45 +1,240 @@
+from __future__ import annotations
 from concurrent.futures import thread
 from email.policy import default
 import sys
 import enum
-from typing import Callable
-from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtCore import Qt, QEvent, QObject, pyqtSignal, QMetaObject
+import time
+import markdown
+import threading
+from collections.abc import Callable
+from PyQt6.QtCore import Qt, QEvent, QObject, pyqtSignal, QMetaObject, QTimer, QUrl
+from PyQt6.QtGui import QIcon, QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
     QStackedWidget,
+    QDockWidget,
+    QListWidget,
+    QListWidgetItem,
     QToolBar,
     QLabel,
     QSizePolicy,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTextBrowser,
+    QSpacerItem,
+    QPushButton,
 )
 
 
 from bff.app.theming import get_icon, apply_theme, set_widget_icon, Theme
 from bff.app.icons import Icons
-from bff.app.about_view import AboutView
 from bff.app.types import Config, DefaultViews
-from bff.app.exceptions import Exceptions
-from bff.app._404_view import _404View
-from bff.app.appbar import AppBar
-from bff.app.navbar import NavBar
 from bff.app.killable_thread import KillableThread
 from bff.app.mp_logging import get_logger, start_logging_subprocess
 import logging
 
-
 __qapp__ = QApplication(sys.argv)
 
 
+class Exceptions:
+    class ViewAlreadyRegistered(Exception):
+        def __init__(self, view_name:str) -> None:
+            super().__init__(f"A View with the name '{view_name}' is already registered")
+
+    class TaskAlreadyDefined(Exception):
+        def __init__(self, function:Callable) -> None:
+            super().__init__(f"A Task with the name '{function.__name__}' is already registered")
+    
+    class TasksAlreadyRunning(Exception):
+        def __init__(self, functions:list[str]) -> None:
+            functions_str = ", ".join(functions)
+            super().__init__(f"Following functions are already running: {functions_str}")
+
+
+class _404View(QWidget):
+    def __init__(self):
+        super().__init__()
+        face = QLabel(DefaultViews._404.value)
+        face.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        face.setStyleSheet("font-size: 48px;")
+        label = QLabel("404 - it's lonely here")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = QVBoxLayout(self)
+        layout.addStretch(1)
+        layout.addWidget(face)
+        layout.addSpacerItem(QSpacerItem(0, 20, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed))
+        layout.addWidget(label)
+        layout.addStretch(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.setLayout(layout)
+
+
+class AboutView(QWidget):
+    def __init__(self):
+        super().__init__()
+        # --- Layouts ---
+        main_layout = QHBoxLayout(self)
+        self.setLayout(main_layout)
+        # --- Markdown Viewer (QTextBrowser) ---
+        self.text_browser = QTextBrowser()
+        self.text_browser.setStyleSheet("""
+            QTextBrowser {
+                border: none;
+                background: transparent;
+            }
+        """)
+        self.text_browser.setOpenExternalLinks(True)  # Make links clickable
+        # Convert Markdown to HTML
+        markdown_text = sys.modules["__main__"].__doc__ if sys.modules["__main__"].__doc__ else """ - """
+        html = markdown.markdown(markdown_text, extensions=["tables"])
+        # add minimal CSS styling
+        styled_html = f"""
+        <style>
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
+            body {{ font-family: Arial, sans-serif; }}
+        </style>
+        {html}
+        """
+        self.text_browser.setHtml(styled_html)
+
+        # --- Buttons for URLs ---
+        button_urls = [
+            ("Find Me On Bitbucket", Config.repository, "storage"),
+            ("Get Help", Config.docu_depot, "help"),
+            ("About HTTP server", f"http://127.0.0.1:{Config.server_port}/docs", "api"),
+        ]
+        button_layout = QVBoxLayout()
+        for label, url, icon in button_urls:
+            btn = QPushButton(label)
+            set_widget_icon(icon, btn)  # Set icon if available
+            btn.setFlat(True)
+            btn.setStyleSheet("text-align: left; padding-left: 8px;") 
+            if not url:
+                btn.setEnabled(False)
+            else:
+                btn.clicked.connect(lambda _, link=url: self.open_url(link))
+            button_layout.addWidget(btn)
+        button_layout.addStretch()
+
+        # --- Assemble layouts ---
+        main_layout.addStretch(1)
+        main_layout.addWidget(self.text_browser, 3)   # Markdown view
+        main_layout.addLayout(button_layout, 1)       # Buttons
+
+    def open_url(self, url):
+        """Open the given URL in the system's default browser."""
+        QDesktopServices.openUrl(QUrl(url))
+
+
+class AppBar(QToolBar):
+
+    def __init__(self, parent=None, theme:Theme=Theme.LIGHT):
+        super().__init__(parent)
+        self.setObjectName("appBar")
+        self.setMovable(False)
+        self.setFloatable(False)
+        self.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea | Qt.ToolBarArea.BottomToolBarArea)
+
+        self.toggle_navbar = QAction("toggleNavbar", self)
+        self.toggle_navbar.setToolTip("Toggle Navigation Bar")
+        set_widget_icon(Icons.MENU.value, self.toggle_navbar)
+        self.addAction(self.toggle_navbar)
+
+        self.view_name = QLabel(self)
+        self.view_name.setText(DefaultViews._404.value)
+        self.view_name.setToolTip("Currently selected View")
+        self.addWidget(self.view_name)
+
+        # spacer is used to allign other buttons to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.addWidget(spacer)
+
+        self.start_stop_button = QAction("startStopButton", self)
+        self.start_stop_button.setObjectName("startStopButton")
+        self.start_stop_button.setCheckable(True)
+        self.start_stop_button.setChecked(False)
+        self.start_stop_button.setToolTip("Start Measurement")
+        # prevent user to check the button
+        self.start_stop_button.triggered.connect(lambda _: self.start_stop_button.setChecked(not self.start_stop_button.isChecked()))
+        self.addAction(self.start_stop_button)
+        set_widget_icon(Icons.PLAY.value, self.start_stop_button)
+
+        self.home_button = QAction(DefaultViews.HOME.name, parent=self)
+        self.home_button.setToolTip("Show Home View")
+        self.addAction(self.home_button)
+        set_widget_icon(Icons.HOME.value, self.home_button)
+
+        self.settings_button = QAction("settingButton", self)
+        self.settings_button.setToolTip("Show Settings View")
+        self.addAction(self.settings_button)
+        set_widget_icon(Icons.SETTINGS.value, self.settings_button)
+
+        self.user_manager = QAction(DefaultViews.USERS.name, self)
+        self.user_manager.setToolTip("Show User Manager")
+        self.addAction(self.user_manager)
+        set_widget_icon(Icons.PERSON.value, self.user_manager)
+
+        self.btn_change_theme = QAction("changeThemeButton", self)
+        if theme == Theme.LIGHT:
+            self.btn_change_theme.setToolTip("Switch To Dark Mode")
+            set_widget_icon(Icons.DARK_MODE.value, self.btn_change_theme)
+        else:
+            self.btn_change_theme.setToolTip("Switch To Light Mode")
+            set_widget_icon(Icons.LIGHT_MODE.value, self.btn_change_theme)
+        self.addAction(self.btn_change_theme)
+
+        self.about_button = QAction(DefaultViews.ABOUT.name, self)
+        self.about_button.setToolTip("About The Project")
+        self.addAction(self.about_button)
+        set_widget_icon(Icons.INFO.value, self.about_button)
+
+
+class NavBar(QDockWidget):
+    def __init__(self, parent:QMainWindow, show_view:Callable[[str], None]):
+        super().__init__(None, parent)
+        self.setStyleSheet("""
+            QDockWidget {
+                background: transparent;
+            }
+            QDockWidget QWidget {
+                background: transparent;
+            }
+            QListWidget {
+                background: transparent;
+                border: none;
+            }
+        """)
+        self.__show_view__: Callable[[str], None] = show_view
+        self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
+        self.setTitleBarWidget(QWidget())
+        # self.
+        # self.setFixedWidth(300)
+        self.items = QListWidget()
+        self.items.itemClicked.connect(self.on_item_clicked)
+        self.setWidget(self.items)
+
+    def register_item(self, name: str, icon:str):
+        item = QListWidgetItem(name)
+        # item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        set_widget_icon(icon, item)
+        self.items.addItem(item)
+
+    def on_item_clicked(self, item: QListWidgetItem):
+        self.__show_view__(item.text())
+
+
 class BFF(QMainWindow):
+    __instance__:BFF|None = None
+    __lock__:threading.Lock = threading.Lock()
+    __init_done__:bool = False
 
     def __init__(self):
         super().__init__()
-
-        # log_queue = start_logging_subprocess()
-        # logger: logging.Logger = get_logger(log_queue)
-        # logger.info("Hello from main process!")
         
         self.__theme__:Theme = Theme.LIGHT
 
@@ -48,6 +243,7 @@ class BFF(QMainWindow):
         self.__on_start_measurement__:Callable[[], None]|None = None
         self.__on_stop_measurement__:Callable[[], None]|None = None
         self.__on_startup__:Callable[[], None]|None = None
+        self.__on_shutdown__:Callable[[], None]|None = None
 
         self.__views__:dict[str, QWidget] = {}
         self.__views_stack__ = QStackedWidget()
@@ -63,7 +259,7 @@ class BFF(QMainWindow):
 
         # Initialize the toolbar
         self.__toolbar__ = AppBar(self, theme=self.__theme__)
-        self.__toolbar__.actionTriggered.connect(self.on_toolbar_action_triggered)
+        self.__toolbar__.actionTriggered.connect(self.__on_toolbar_action_triggered__)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.__toolbar__)
         
         self.register_view(name=DefaultViews._404.name, widget=_404View())
@@ -72,6 +268,18 @@ class BFF(QMainWindow):
         # start eventlistener on the page
         self.installEventFilter(self)
         apply_theme(__qapp__, theme=Theme.LIGHT)
+
+        BFF.__init_done__ = True  # Mark the instance as initialized
+
+    def __update_start_stop_button__(self, new_state:bool):
+        if new_state:
+            self.__toolbar__.start_stop_button.setToolTip("Stop Measurement")
+            self.__toolbar__.start_stop_button.setChecked(True)
+            set_widget_icon(icon_name=Icons.STOP.value, widget=self.__toolbar__.start_stop_button)
+        else:
+            self.__toolbar__.start_stop_button.setToolTip("Start Measurement")
+            self.__toolbar__.start_stop_button.setChecked(False)
+            set_widget_icon(icon_name=Icons.PLAY.value, widget=self.__toolbar__.start_stop_button)
 
     def __show_view__(self, name:str) -> None:
         """Shows the view with the given name in the main window.
@@ -88,17 +296,7 @@ class BFF(QMainWindow):
         self.__views_stack__.setCurrentIndex(0)
         self.__toolbar__.view_name.setText(DefaultViews._404.value)
 
-    def __start_background_tasks__(self) -> None:
-        """Starts all registered background tasks in separate threads.
-        This method iterates over all registered background tasks and starts each one in a new `KillableThread`.
-        Raises:
-            Exceptions.BackgroundTaskAlreadyDefined: If a task is already registered.
-        """
-        for task in self.__bg_tasks__.keys():
-            self.__bg_tasks__[task].start()
-            # TODO write to log
-
-    def on_toolbar_action_triggered(self, action:QAction) -> None:
+    def __on_toolbar_action_triggered__(self, action:QAction) -> None:
         """Handles actions triggered from the toolbar.
         This method is connected to the `actionTriggered` signal of the toolbar.
         Args:
@@ -109,8 +307,7 @@ class BFF(QMainWindow):
                 self.__nav_bar__.setVisible(not self.__nav_bar__.isVisible())
             
             case self.__toolbar__.start_stop_button:
-                print(f"Start/Stop Measurement: {action.isChecked()}")
-                self.stop_measurement() if action.isChecked() else self.start_measurement()
+                self.__stop_measurement__() if action.isChecked() else self.__start_measurement__()
             
             case self.__toolbar__.btn_change_theme:
                 if self.__theme__ == Theme.LIGHT:
@@ -124,6 +321,82 @@ class BFF(QMainWindow):
             case _:
                 self.__show_view__(name=action.text())
 
+    def __register_task__(self, function:Callable[[], None], tasks:dict[Callable[[], None], KillableThread]) -> Callable[[], None]:
+        if function in tasks.keys():
+            raise Exceptions.TaskAlreadyDefined(function=function)
+        tasks[function] = KillableThread(target=function)
+        return function
+
+    def __get_running_tasks__(self, tasks:dict[Callable[[], None], KillableThread]) -> list[Callable[[], None]]:
+        """Returns a list if functions that are currently running (appropriate thread is alive)."""
+        running_tasks: list[Callable[[], None]] = []
+        for function, thread in tasks.items():
+            if thread is None:
+                continue
+            if thread.is_alive():
+                running_tasks.append(function)
+        return running_tasks
+    
+    def __stop_tasks__(self, tasks:dict[Callable[[], None], KillableThread]):
+        """Stops all tasks in the given dictionary by killing their threads."""
+        running_functions: list[Callable[[], None]] = self.__get_running_tasks__(tasks=tasks)
+        for function in running_functions:
+            tasks[function].kill()
+        for function in running_functions:
+            tasks[function].join()
+
+    def __start_tasks__(self, tasks:dict[Callable[[], None], KillableThread]) -> None:
+        """Starts all tasks in the given dictionary by starting their threads."""
+        running_functions: list[Callable[[], None]] = self.__get_running_tasks__(tasks=tasks)
+        if running_functions:
+            # raise an error because at least one of the tasks to be started is already running
+            names = [function.__name__ for function in running_functions]
+            raise Exceptions.TasksAlreadyRunning(names)
+        for function in tasks.keys():
+            tasks[function] = KillableThread(target=function)
+            tasks[function].start()
+
+    def __start_measurement__(self) -> None:
+        """Starts measurement and all measurement-tasks in separate threads.
+        This method performs the following actions:
+        1. Calls the `on_measurement_start` callback if it is set.
+        2. Iterates over the measurement tasks and starts each task in a new `KillableThread`.
+        3. Updates the application bar.
+        """
+        # check if any thread is still running
+        running_functions = self.__get_running_tasks__(self.__m_tasks__)
+        if running_functions:
+            # raise an error because at least one of the tasks to be started is already running
+            names = [function.__name__ for function in running_functions]
+            raise Exceptions.TasksAlreadyRunning(names)
+        # let's get started
+        if self.__on_start_measurement__ is not None:
+            self.__on_start_measurement__()
+        self.__start_tasks__(self.__m_tasks__)
+        self.__toolbar__.start_stop_button.setToolTip("Stop Measurement")
+        self.__toolbar__.start_stop_button.setChecked(True)
+        set_widget_icon(icon_name=Icons.STOP.value, widget=self.__toolbar__.start_stop_button)
+
+    def __stop_measurement__(self) -> None:
+        """Stops the measurement and all measurement-tasks.
+        This method performs the following actions:
+        1. Calls the `on_measurement_stop` callback if it is set.
+        2. Iterates through all measurement tasks and kills each thread.
+        3. Joins each thread to ensure they have completed execution.
+        """
+        self.__stop_tasks__(self.__m_tasks__)
+        if self.__on_stop_measurement__ is not None:
+            self.__on_stop_measurement__()
+        self.__toolbar__.start_stop_button.setToolTip("Start Measurement")
+        self.__toolbar__.start_stop_button.setChecked(False)
+        set_widget_icon(icon_name=Icons.PLAY.value, widget=self.__toolbar__.start_stop_button)
+
+    def stop_measurement(self):
+        """Stops the measurement and all measurement-tasks.
+        Triggers self.__stop_measurement__ in Display Thread so start button us zpdated thread-safe.
+        """
+        QTimer.singleShot(0, self.__stop_measurement__)
+
     def register_background_task(self, function:Callable[[], None]) -> Callable[[], None]:
         """Decorator to mark a function as a background task.
         This decorator allows you to define a function that will be executed in the background. 
@@ -135,10 +408,7 @@ class BFF(QMainWindow):
             Returns:
                 Callable[[], None]: The decorated function.
         """
-        if function in self.__bg_tasks__.keys():
-            raise Exceptions.BackgroundTaskAlreadyDefined(function=function)
-        self.__bg_tasks__[function] = KillableThread(target=function)
-        return function
+        return self.__register_task__(function = function, tasks = self.__bg_tasks__)
     
     def register_measurement_task(self, function:Callable[[], None]) -> Callable[[], None]:
         """Decorator to mark a function as a measurement task.
@@ -151,34 +421,43 @@ class BFF(QMainWindow):
         Returns:    
             None
         """
-        if function in self.__m_tasks__.keys():
-            raise Exceptions.MeasurementTaskAlreadyDefined(function=function)
-        self.__m_tasks__[function] = KillableThread(target=function)
-        return function
+        return self.__register_task__(function = function, tasks = self.__m_tasks__)
     
-    def register_on_start_measurement(self, callback:Callable[[], None]) -> None:
+    def register_on_start_measurement(self, function:Callable[[], None]) -> Callable[[], None]:
         """Registers a callback function to be called when the measurement is started.
         This function will be called before any measurement tasks are started.
         Args:
             callback (Callable[[]]): The callback function to be called on measurement start.
         """
-        self.__on_start_measurement__ = callback
+        self.__on_start_measurement__ = function
+        return self.__on_start_measurement__
 
-    def register_on_stop_measurement(self, callback:Callable[[], None]) -> None:
+    def register_on_stop_measurement(self, function:Callable[[], None]) -> Callable[[], None]:
         """Registers a callback function to be called when the measurement is stopped.
         This function will be called after all measurement tasks are stopped.
         Args:
             callback (Callable[[]]): The callback function to be called on measurement stop.
         """
-        self.__on_stop_measurement__ = callback
+        self.__on_stop_measurement__ = function
+        return self.__on_stop_measurement__
 
-    def register_on_startup(self, callback:Callable[[], None]) -> None:
+    def register_on_startup(self, function:Callable[[], None]) -> Callable[[], None]:
         """Registers a callback function to be called when the application starts up.
         This function will be called after the application is initialized but before any background tasks are started.
         Args:
             callback (Callable[[]]): The callback function to be called on application startup.
         """
-        self.__on_startup__ = callback
+        self.__on_startup__ = function
+        return self.__on_startup__
+
+    def register_on_shutdown(self, function:Callable[[], None]) -> Callable[[], None]:
+        """Registers a callback function to be called when the application is shutting down.
+        This function will be called after all background tasks are stopped and before the application exits.
+        Args:
+            callback (Callable[[]]): The callback function to be called on application shutdown.
+        """
+        self.__on_shutdown__ = function
+        return self.__on_shutdown__
 
     def register_view(self, name:str, widget:QWidget, icon:str = Icons.ROBOT.value) -> None:
         """Adds a view to the navigation bar. When the item is selected, the given controls will be shown in the body.
@@ -194,51 +473,33 @@ class BFF(QMainWindow):
         if name not in DefaultViews._member_names_:
             self.__nav_bar__.register_item(name, icon)
 
-    def start_measurement(self) -> None:
-        """Starts measurement and all measurement-tasks in separate threads.
-        This method performs the following actions:
-        1. Calls the `on_measurement_start` callback if it is set.
-        2. Iterates over the measurement tasks and starts each task in a new `KillableThread`.
-        3. Updates the application bar.
+    def closeEvent(self, event) -> None: # type:ignore
+        """Handles the close event of the main window.
+        This method is called when the user attempts to close the main window.
+        It stops the measurement, stops all background tasks, and calls the shutdown callback if it is set.
+        Args:
+            event (QCloseEvent): The close event.
         """
-        # check if any thread is still running
-        running_tasks = []
-        for function, thread in self.__m_tasks__.items():
-            if thread.is_alive():
-                running_tasks.append(function.__name__)
-        if running_tasks:
-            raise Exceptions.MeasurementAlreadyRunning(functions=running_tasks)
-        # let's get started
-        if self.__on_start_measurement__ is not None:
-            self.__on_start_measurement__()
-        for task in self.__m_tasks__.keys():
-            thread = KillableThread(target=task)
-            self.__m_tasks__[task] = KillableThread(target=task)
-            self.__m_tasks__[task].start()
-        self.__toolbar__.start_stop_button.setToolTip("Stop Measurement")
-        self.__toolbar__.start_stop_button.setChecked(True)
-        set_widget_icon(icon_name=Icons.STOP.value, widget=self.__toolbar__.start_stop_button)
+        self.__stop_measurement__()
+        self.__stop_tasks__(self.__bg_tasks__)
+        if self.__on_shutdown__ is not None:
+            self.__on_shutdown__()
+        event.accept()
 
-    def stop_measurement(self) -> None:
-        """Stops the measurement and all measurement-tasks.
-        This method performs the following actions:
-        1. Calls the `on_measurement_stop` callback if it is set.
-        2. Iterates through all measurement tasks and kills each thread.
-        3. Joins each thread to ensure they have completed execution.
+    def showEvent(self, event) -> None: #type:ignore
+        """Handles the show event of the main window.
+        This method is called when the main window is shown.
+        It starts the background tasks and calls the startup callback if it is set.
+        Args:
+            event (QShowEvent): The show event.
         """
-        if self.__on_stop_measurement__ is not None:
-            self.__on_stop_measurement__()
-        for thread in self.__m_tasks__.values():
-            thread.kill()
-        for thread in self.__m_tasks__.values():
-            thread.join()
-        self.__toolbar__.start_stop_button.setToolTip("Start Measurement")
-        self.__toolbar__.start_stop_button.setChecked(False)
-        set_widget_icon(icon_name=Icons.PLAY.value, widget=self.__toolbar__.start_stop_button)
-        
+        if self.__on_startup__ is not None:
+            self.__on_startup__()
+        self.__start_tasks__(self.__bg_tasks__)
     
     def eventFilter(self, object: QObject, event: QEvent) -> bool: # type:ignore
-        """Hide NavBar if user clicks outside it.
+        """Event filter to handle mouse events on the main window.
+        This method is used to hide the navigation bar when the mouse is clicked outside of it.
         """
         if event.type() == QEvent.Type.MouseButtonPress:
             if self.__nav_bar__.isVisible():
@@ -258,7 +519,7 @@ class BFF(QMainWindow):
 
     def run(self):
         self.show()
-        if self.__on_startup__ is not None:
-            self.__on_startup__()
-        self.__start_background_tasks__()
         sys.exit(__qapp__.exec())
+
+
+instance:BFF = BFF() 
