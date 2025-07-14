@@ -163,17 +163,17 @@ class AppBar(QToolBar):
         self.addAction(self.start_stop_button)
         set_widget_icon(Icons.PLAY.value, self.start_stop_button)
 
-        self.home_button = QAction(DefaultViews.HOME.name, parent=self)
+        self.home_button = QAction(DefaultViews.HOME.value, parent=self)
         self.home_button.setToolTip("Show Home View")
         self.addAction(self.home_button)
         set_widget_icon(Icons.HOME.value, self.home_button)
 
-        self.settings_button = QAction("settingButton", self)
+        self.settings_button = QAction(DefaultViews.SETTINGS.value, self)
         self.settings_button.setToolTip("Show Settings View")
         self.addAction(self.settings_button)
         set_widget_icon(Icons.SETTINGS.value, self.settings_button)
 
-        self.user_manager = QAction(DefaultViews.USERS.name, self)
+        self.user_manager = QAction(DefaultViews.USERS.value, self)
         self.user_manager.setToolTip("Show User Manager")
         self.addAction(self.user_manager)
         set_widget_icon(Icons.PERSON.value, self.user_manager)
@@ -187,7 +187,7 @@ class AppBar(QToolBar):
             set_widget_icon(Icons.LIGHT_MODE.value, self.btn_change_theme)
         self.addAction(self.btn_change_theme)
 
-        self.about_button = QAction(DefaultViews.ABOUT.name, self)
+        self.about_button = QAction(DefaultViews.ABOUT.value, self)
         self.about_button.setToolTip("About The Project")
         self.addAction(self.about_button)
         set_widget_icon(Icons.INFO.value, self.about_button)
@@ -246,6 +246,7 @@ class BFF(QMainWindow):
         self.__on_shutdown__:Callable[[], None]|None = None
 
         self.__views__:dict[str, QWidget] = {}
+        self.__view_changed_event_handlers__:dict[str, Callable[[str], None]] = {}
         self.__views_stack__ = QStackedWidget()
         self.setWindowTitle(f"{Config.app_name} - {sys.modules["__main__"].__file__.split('\\')[-1]}") #type:ignore
         self.setWindowIcon(QIcon(get_icon(Icons.ROBOT.value)))
@@ -262,8 +263,8 @@ class BFF(QMainWindow):
         self.__toolbar__.actionTriggered.connect(self.__on_toolbar_action_triggered__)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.__toolbar__)
         
-        self.register_view(name=DefaultViews._404.name, widget=_404View())
-        self.register_view(name=DefaultViews.ABOUT.name, widget=AboutView())
+        self.register_view(name=DefaultViews._404.value, widget=_404View())
+        self.register_view(name=DefaultViews.ABOUT.value, widget=AboutView())
         
         # start eventlistener on the page
         self.installEventFilter(self)
@@ -292,9 +293,11 @@ class BFF(QMainWindow):
             idx: int = self.__views_stack__.indexOf(widget)
             self.__views_stack__.setCurrentIndex(idx)
             self.__toolbar__.view_name.setText(name)
+            if name in self.__view_changed_event_handlers__:
+                self.__view_changed_event_handlers__[name](name)
             return
         self.__views_stack__.setCurrentIndex(0)
-        self.__toolbar__.view_name.setText(DefaultViews._404.value)
+        self.__toolbar__.view_name.setText(name)
 
     def __on_toolbar_action_triggered__(self, action:QAction) -> None:
         """Handles actions triggered from the toolbar.
@@ -397,6 +400,20 @@ class BFF(QMainWindow):
         """
         QTimer.singleShot(0, self.__stop_measurement__)
 
+    def start_measurement(self):
+        """Starts the measurement and all measurement-tasks.
+        Triggers self.__start_measurement__ in Display Thread so start button us zpdated thread-safe.
+        """
+        QTimer.singleShot(0, self.__start_measurement__)
+
+    def show_view(self, name:str) -> None:
+        """Shows the view with the given name in the main window.
+        If the view is not registered, it will show the 404 view.
+        Args:
+            name (str): The name of the view to be shown.
+        """
+        QTimer.singleShot(0, lambda: self.__show_view__(name=name))
+
     def register_background_task(self, function:Callable[[], None]) -> Callable[[], None]:
         """Decorator to mark a function as a background task.
         This decorator allows you to define a function that will be executed in the background. 
@@ -459,7 +476,7 @@ class BFF(QMainWindow):
         self.__on_shutdown__ = function
         return self.__on_shutdown__
 
-    def register_view(self, name:str, widget:QWidget, icon:str = Icons.ROBOT.value) -> None:
+    def register_view(self, name:str, widget:QWidget, icon:str = Icons.ROBOT.value, on_show:Callable[[str], None]|None = None) -> None:
         """Adds a view to the navigation bar. When the item is selected, the given controls will be shown in the body.
         Args:
             name (str): The view name.
@@ -470,7 +487,9 @@ class BFF(QMainWindow):
             raise Exceptions.ViewAlreadyRegistered(name)
         self.__views__[name] = widget
         self.__views_stack__.addWidget(self.__views__[name])
-        if name not in DefaultViews._member_names_:
+        if on_show:
+            self.__view_changed_event_handlers__[name] = on_show
+        if name not in [v.value for v in DefaultViews]:
             self.__nav_bar__.register_item(name, icon)
 
     def closeEvent(self, event) -> None: # type:ignore
@@ -522,4 +541,5 @@ class BFF(QMainWindow):
         sys.exit(__qapp__.exec())
 
 
-instance:BFF = BFF() 
+# def instance():
+#     return BFF() 

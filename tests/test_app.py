@@ -17,26 +17,23 @@ This **supports**:
 | Bob    | 25  |
 """
 
-from cgitb import text
 import sys
 import os
 from turtle import update
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', )))
+print()
 print(sys.path)
-
 from PyQt6.QtWidgets import QPushButton, QApplication, QWidget, QVBoxLayout, QLabel
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
-import bff.app
-from bff.app.icons import Icons
-from bff.app.types import Config
 from PyQt6.QtGui import QPalette, QColor
-
 from threading import Thread
 import time
+from bff.app import Config, BFF, DefaultViews
+from bff.app.icons import Icons
+from bff.components.graph import GraphWidget
 
-Config.app_name = "BFF Test App"
-
-app = bff.app.instance
+Config.app_name = "BFF Test Application"
+app = BFF()
 
 
 class TextUpdater(QObject):
@@ -51,20 +48,27 @@ button2.setText("Button2")
 text = QLabel()
 text.setText("Hello World")
 
+gr = GraphWidget()
+
 
 updater = TextUpdater()
 updater.update_text.connect(text.setText)
 
 
+def view_changed(name: str) -> None:
+    print(f"View changed to: {name}")
+
 app.register_view(name=f"myView", widget=button, icon="coffee")
 app.register_view(name=f"myView2", widget=button2, icon="coffee")
-app.register_view(name=f"text", widget=text, icon="coffee")
+app.register_view(name=f"text", widget=text, icon="coffee", on_show=view_changed)
+app.register_view(name=f"TheGraph", widget=gr, icon="coffee", on_show=view_changed)
 
 
 @app.register_on_startup
 def on_startup():
     print("Application started up")
-    # app.show_view("myView")
+    app.show_view("text")
+    app.start_measurement()
 
 
 @app.register_on_shutdown
@@ -98,8 +102,9 @@ def measurement_task():
 
 @app.register_measurement_task
 def measurement_task2():
-    time.sleep(10)
+    time.sleep(1)
     app.stop_measurement()
+    app.show_view(DefaultViews.HOME.value)
 
 
 app.run()

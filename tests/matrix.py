@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QGraphic
 
 
 class MatrixRainEffect(QGraphicsEffect):
-    def __init__(self, parent=None, font_size=14, update_interval=33):
+    def __init__(self, parent=None, font_size=14, update_interval=50):
         super().__init__(parent)
         self.font_size = font_size
         self.timer_interval = update_interval
@@ -85,20 +85,26 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     main_widget = QWidget()
+    main_widget.setStyleSheet("""
+        QWidget {
+            background: blue;
+        }
+    """)
     main_widget.setWindowTitle("MatrixRain QGraphicsEffect (Movie-Accurate)")
     main_widget.resize(800, 600)
 
-    layout = QVBoxLayout(main_widget)
-    label = QLabel("Movie-Accurate\nMatrix Rain Effect")
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet("""
-        QLabel {
-            color: white;
-            font-size: 24px;
-            background: transparent;
-        }
-    """)
-    layout.addWidget(label)
+    # layout = QVBoxLayout(main_widget)
+    
+    # label = QLabel("Movie-Accurate\nMatrix Rain Effect")
+    # label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    # label.setStyleSheet("""
+    #     QLabel {
+    #         color: white;
+    #         font-size: 24px;
+    #         background: blue;
+    #     }
+    # """)
+    # layout.addWidget(label)
 
     # Apply the Matrix effect
     effect = MatrixRainEffect(font_size=14)

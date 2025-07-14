@@ -12,7 +12,7 @@ class Config:
 
 class DefaultViews(enum.Enum):
     _404 = "(˚Δ˚)b"
-    HOME = enum.auto()
-    SETTINGS = enum.auto()
-    USERS = enum.auto()
-    ABOUT = enum.auto()
+    HOME = "/HOME"
+    SETTINGS = "/SETTINGS"
+    USERS = "/USERS"
+    ABOUT = "/ABOUT"

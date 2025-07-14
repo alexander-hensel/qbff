@@ -13,8 +13,9 @@ from typing import Protocol
 
 
 class Theme(enum.Enum):
-    DARK = "dark_blue.xml"
-    LIGHT = "light_blue_500.xml"
+    # DARK = "dark_blue.xml"
+    DARK = "dark_cyan.xml"
+    LIGHT = "light_cyan_500.xml"
 
 
 class IconContainer(Protocol):
