@@ -31,7 +31,7 @@ class GraphWidget(QWidget):
         self.canvas.axes.set_xlabel('X-axis')
         self.canvas.axes.set_ylabel('Y-axis')
         self.canvas.axes.grid(True)
-        x = np.linspace(0, 10_000, 10_000)
+        x = np.linspace(0, 1_000_000, 1_000_000)
         y = np.sin(x)
         self.plot_data(x, y)
 

@@ -8,7 +8,7 @@ import markdown
 import threading
 from collections.abc import Callable
 from PyQt6.QtCore import Qt, QEvent, QObject, pyqtSignal, QMetaObject, QTimer, QUrl
-from PyQt6.QtGui import QIcon, QAction, QDesktopServices
+from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -51,6 +51,14 @@ class Exceptions:
         def __init__(self, functions:list[str]) -> None:
             functions_str = ", ".join(functions)
             super().__init__(f"Following functions are already running: {functions_str}")
+
+
+class ActionWithTooltip(QAction):
+    def setToolTip(self, tip: str|None):
+        shortcut = self.shortcut()
+        if not shortcut.isEmpty():
+            tip = f"{tip} ({shortcut.toString(QKeySequence.SequenceFormat.NativeText)})"
+        super().setToolTip(tip)
 
 
 class _404View(QWidget):
@@ -138,7 +146,8 @@ class AppBar(QToolBar):
         self.setFloatable(False)
         self.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea | Qt.ToolBarArea.BottomToolBarArea)
 
-        self.toggle_navbar = QAction("toggleNavbar", self)
+        self.toggle_navbar = ActionWithTooltip("toggleNavbar", self)
+        self.toggle_navbar.setShortcut("Ctrl+Shift+m")
         self.toggle_navbar.setToolTip("Toggle Navigation Bar")
         set_widget_icon(Icons.MENU.value, self.toggle_navbar)
         self.addAction(self.toggle_navbar)
@@ -153,32 +162,37 @@ class AppBar(QToolBar):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
 
-        self.start_stop_button = QAction("startStopButton", self)
+        self.start_stop_button = ActionWithTooltip("startStopButton", self)
         self.start_stop_button.setObjectName("startStopButton")
         self.start_stop_button.setCheckable(True)
         self.start_stop_button.setChecked(False)
+        self.start_stop_button.setShortcut("Ctrl+Shift+r")
         self.start_stop_button.setToolTip("Start Measurement")
         # prevent user to check the button
         self.start_stop_button.triggered.connect(lambda _: self.start_stop_button.setChecked(not self.start_stop_button.isChecked()))
         self.addAction(self.start_stop_button)
         set_widget_icon(Icons.PLAY.value, self.start_stop_button)
 
-        self.home_button = QAction(DefaultViews.HOME.value, parent=self)
+        self.home_button = ActionWithTooltip(DefaultViews.HOME.value, parent=self)
+        self.home_button.setShortcut("Ctrl+Shift+h")
         self.home_button.setToolTip("Show Home View")
         self.addAction(self.home_button)
         set_widget_icon(Icons.HOME.value, self.home_button)
 
-        self.settings_button = QAction(DefaultViews.SETTINGS.value, self)
+        self.settings_button = ActionWithTooltip(DefaultViews.SETTINGS.value, self)
+        self.settings_button.setShortcut("Ctrl+Shift+s")
         self.settings_button.setToolTip("Show Settings View")
         self.addAction(self.settings_button)
         set_widget_icon(Icons.SETTINGS.value, self.settings_button)
 
-        self.user_manager = QAction(DefaultViews.USERS.value, self)
+        self.user_manager = ActionWithTooltip(DefaultViews.USERS.value, self)
+        self.user_manager.setShortcut("Ctrl+Shift+u")
         self.user_manager.setToolTip("Show User Manager")
         self.addAction(self.user_manager)
         set_widget_icon(Icons.PERSON.value, self.user_manager)
 
-        self.btn_change_theme = QAction("changeThemeButton", self)
+        self.btn_change_theme = ActionWithTooltip("changeThemeButton", self)
+        self.btn_change_theme.setShortcut("Ctrl+Shift+t")
         if theme == Theme.LIGHT:
             self.btn_change_theme.setToolTip("Switch To Dark Mode")
             set_widget_icon(Icons.DARK_MODE.value, self.btn_change_theme)
@@ -187,7 +201,8 @@ class AppBar(QToolBar):
             set_widget_icon(Icons.LIGHT_MODE.value, self.btn_change_theme)
         self.addAction(self.btn_change_theme)
 
-        self.about_button = QAction(DefaultViews.ABOUT.value, self)
+        self.about_button = ActionWithTooltip(DefaultViews.ABOUT.value, self)
+        self.about_button.setShortcut("Ctrl+Shift+i")
         self.about_button.setToolTip("About The Project")
         self.addAction(self.about_button)
         set_widget_icon(Icons.INFO.value, self.about_button)
@@ -228,14 +243,16 @@ class NavBar(QDockWidget):
         self.__show_view__(item.text())
 
 
-class BFF(QMainWindow):
-    __instance__:BFF|None = None
-    __lock__:threading.Lock = threading.Lock()
-    __init_done__:bool = False
-
-    def __init__(self):
+class MainWindow(QMainWindow):
+    """The main application class for the BFF (Big Fat Framework) application.
+    This class is responsible for managing the main window, views, and application logic.
+    It provides methods to register views, background tasks, and measurement tasks, as well as handling application startup and shutdown.
+    """
+    def __init__(self, controller:BFF):
         super().__init__()
         
+        self.controller: BFF = controller
+
         self.__theme__:Theme = Theme.LIGHT
 
         self.__bg_tasks__:dict[Callable[[], None], KillableThread] = {}
@@ -244,6 +261,7 @@ class BFF(QMainWindow):
         self.__on_stop_measurement__:Callable[[], None]|None = None
         self.__on_startup__:Callable[[], None]|None = None
         self.__on_shutdown__:Callable[[], None]|None = None
+        self.__measurement_running__:bool = False
 
         self.__views__:dict[str, QWidget] = {}
         self.__view_changed_event_handlers__:dict[str, Callable[[str], None]] = {}
@@ -270,9 +288,13 @@ class BFF(QMainWindow):
         self.installEventFilter(self)
         apply_theme(__qapp__, theme=Theme.LIGHT)
 
-        BFF.__init_done__ = True  # Mark the instance as initialized
+        self.controller.__enable_measurement__.connect(self.__toolbar__.start_stop_button.setDisabled)
 
     def __update_start_stop_button__(self, new_state:bool):
+        """Updates the start/stop button in the toolbar based on the new state.
+        Args:
+            new_state (bool): The new state of the measurement. If True, the button will be set to "Stop Measurement", otherwise to "Start Measurement".
+        """
         if new_state:
             self.__toolbar__.start_stop_button.setToolTip("Stop Measurement")
             self.__toolbar__.start_stop_button.setChecked(True)
@@ -325,6 +347,16 @@ class BFF(QMainWindow):
                 self.__show_view__(name=action.text())
 
     def __register_task__(self, function:Callable[[], None], tasks:dict[Callable[[], None], KillableThread]) -> Callable[[], None]:
+        """Registers a function as a task in the given dictionary.
+        This method checks if the function is already registered, and if not, adds it to the dictionary with a new `KillableThread`.
+        Args:
+            function (Callable[[], None]): The function to be registered as a task.
+            tasks (dict[Callable[[], None], KillableThread]): The dictionary to register the task in.
+            Raises:
+                Exceptions.TaskAlreadyDefined: If the function is already registered as a task.
+                Returns:
+                    Callable[[], None]: The registered function.
+        """
         if function in tasks.keys():
             raise Exceptions.TaskAlreadyDefined(function=function)
         tasks[function] = KillableThread(target=function)
@@ -379,6 +411,7 @@ class BFF(QMainWindow):
         self.__toolbar__.start_stop_button.setToolTip("Stop Measurement")
         self.__toolbar__.start_stop_button.setChecked(True)
         set_widget_icon(icon_name=Icons.STOP.value, widget=self.__toolbar__.start_stop_button)
+        self.__measurement_running__ = True
 
     def __stop_measurement__(self) -> None:
         """Stops the measurement and all measurement-tasks.
@@ -393,6 +426,11 @@ class BFF(QMainWindow):
         self.__toolbar__.start_stop_button.setToolTip("Start Measurement")
         self.__toolbar__.start_stop_button.setChecked(False)
         set_widget_icon(icon_name=Icons.PLAY.value, widget=self.__toolbar__.start_stop_button)
+        self.__measurement_running__ = False
+
+    @property
+    def is_running(self) -> bool:
+        return self.__measurement_running__
 
     def stop_measurement(self):
         """Stops the measurement and all measurement-tasks.
@@ -541,5 +579,46 @@ class BFF(QMainWindow):
         sys.exit(__qapp__.exec())
 
 
-# def instance():
-#     return BFF() 
+class BFF(QObject):
+    __start_measurement__ = pyqtSignal(bool)
+    __enable_measurement__ = pyqtSignal(bool)
+
+    def __init__(self):
+        super().__init__()
+        self.window = MainWindow(self)
+        self.__bg_tasks__:dict[Callable[[], None], KillableThread] = {}
+        self.__m_tasks__:dict[Callable[[], None], KillableThread] = {}
+        self.__on_start_measurement__:Callable[[], None]|None = None
+        self.__on_stop_measurement__:Callable[[], None]|None = None
+        self.__on_startup__:Callable[[], None]|None = None
+        self.__on_shutdown__:Callable[[], None]|None = None
+        self.__measurement_running__:bool = False
+
+
+    def start_measurement(self):
+        self.__start_measurement__.emit(True)
+
+    def stop_measurement(self):
+        self.__start_measurement__.emit(False)
+
+    def enable_measurement(self):
+        self.__enable_measurement__.emit(False)
+
+    def disable_measurement(self):
+        self.__enable_measurement__.emit(True)
+
+    # def show_view(self, name)
+
+    def run(self):
+        self.window.run()
+
+
+
+def start_automatic():
+    pass
+
+def stop_automatic():
+    pass
+
+def show_view(name:str):
+    pass
