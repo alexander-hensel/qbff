@@ -96,15 +96,12 @@ class DO:
 
 
 app = BFF()
-app.disable_measurement()
-
 digital_inputs = DI()
 digital_outputs = DO()
 
 
-
 # @app.register_on_startup
-def on_startup():
+def on_startup__():
     digital_outputs.PCReady = True
     digital_outputs.send()
 
@@ -142,40 +139,43 @@ updater.update_text.connect(text.setText)
 def view_changed(name: str) -> None:
     print(f"View changed to: {name}")
 
-# app.register_view(name=f"myView", widget=button, icon="coffee")
-# app.register_view(name=f"myView2", widget=button2, icon="coffee")
-# app.register_view(name=f"text", widget=text, icon="coffee", on_show=view_changed)
+app.window.register_view(name=f"myView", widget=button, icon="coffee")
+app.window.register_view(name=f"myView2", widget=button2, icon="coffee")
+app.window.register_view(name=f"text", widget=text, icon="coffee", on_show=view_changed)
 # app.register_view(name=f"TheGraph", widget=gr, icon="coffee", on_show=view_changed)
 
+@app.register_on_startup
+def on_startup():
+    print("Starting up")
 
 
-# @app.register_on_shutdown
-# def on_shutdown():
-#     print("Shutting down")
+@app.register_on_shutdown
+def on_shutdown():
+    print("Shutting down")
 
 
-# @app.register_on_start_measurement
-# def start_measurement():
-#     print("Measurement started")
+@app.register_on_start_measurement
+def start_measurement():
+    print("Measurement started")
 
 
-# @app.register_on_stop_measurement
-# def stop_measurement():
-#     print("Measurement stopped")
+@app.register_on_stop_measurement
+def stop_measurement():
+    print("Measurement stopped")
 
 
-# @app.register_background_task
-# def task() -> None:
-#     while True:
-#         updater.update_text.emit(f"Hello Background {time.time()}")
-#         time.sleep(0.1)
+@app.register_background_task
+def task() -> None:
+    while True:
+        updater.update_text.emit(f"Hello Background {time.time()}")
+        time.sleep(0.1)
 
 
-# @app.register_measurement_task
-# def measurement_task():
-#     while True:
-#         updater.update_text.emit(f"Hello Measurement Task {time.time()}")
-#         time.sleep(0.1)
+@app.register_measurement_task
+def measurement_task():
+    while True:
+        updater.update_text.emit(f"Hello Measurement Task {time.time()}")
+        time.sleep(0.1)
 
 
 
@@ -186,11 +186,12 @@ def view_changed(name: str) -> None:
 #         time.sleep(0.01)
 
 
-# @app.register_measurement_task
-# def measurement_task2():
-#     time.sleep(5)
-#     app.stop_measurement()
-#     app.show_view(DefaultViews.HOME.value)
+@app.register_measurement_task
+def measurement_task2():
+    print("Measurement Task 2 started"  )
+    time.sleep(5)
+    app.window.show_view(DefaultViews.HOME.value)
+    Thread(target=app.stop_measurement, daemon=True).start()
     
 
 app.run()
