@@ -1,151 +1,110 @@
-import sys
+# import pyqtgraph.examples
+# pyqtgraph.examples.run()
+
+"""
+Demonstrates use of PlotWidget class. This is little more than a 
+GraphicsView with a PlotItem placed in its center.
+"""
+
 import numpy as np
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QPushButton,
-    QCheckBox, QLabel, QWidget
-)
+
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore
+from pyqtgraph.Qt import QtCore, QtWidgets
+
+# pg.useOpenGL = False  # Use OpenGL for better performance if available
+
+app = pg.mkQApp()
+mw = QtWidgets.QMainWindow()
+mw.setWindowTitle('pyqtgraph example: PlotWidget')
+mw.resize(800,800)
+cw = QtWidgets.QWidget()
+mw.setCentralWidget(cw)
+l = QtWidgets.QVBoxLayout()
+cw.setLayout(l)
+
+pw = pg.PlotWidget(name='Plot1')  ## giving the plots names allows us to link their axes together
+l.addWidget(pw)
+pw2 = pg.PlotWidget(name='Plot2')
+l.addWidget(pw2)
+pw3 = pg.PlotWidget()
+l.addWidget(pw3)
+
+mw.show()
+
+## Create an empty plot curve to be filled later, set its pen
+p1 = pw.plot()
+
+data1 = pg.PlotDataItem([])
+data2 = pg.PlotDataItem([])
+data1.setPen(pg.mkPen("#0080c0"))
+data2.setPen(pg.mkPen("#c000b6"))
+pw.addItem(data1)
+pw.addItem(data2)
+# p1.setPen((200,200,100))
+# p42 = pw.plot(pen=(100, 200, 100), name='Plot42')
 
 
-pg.setConfigOptions(useOpenGL=True, antialias=True, background='k', foreground='w')
 
 
-class Oscilloscope(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("🚀 PyQt6 GPU Oscilloscope with Downsampling")
-        self.resize(1000, 600)
+## Add in some extra graphics
+rect = QtWidgets.QGraphicsRectItem(QtCore.QRectF(0, 0, 1, 5e-11))
+# rect.setPen(pg.mkPen(100, 200, 100))
+# pw.addItem(rect)
 
-        # Main widget and layout
-        centralWidget = QWidget()
-        self.setCentralWidget(centralWidget)
-        layout = QVBoxLayout()
-        centralWidget.setLayout(layout)
+# pw.setLabel('left', 'Value', units='V')
+# pw.setLabel('right', 'Value2', units='A')
 
-        # Plot widget
-        self.plotWidget = pg.PlotWidget(title="Oscilloscope View")
-        self.plotWidget.showGrid(x=True, y=True)
-        self.plotWidget.setLabel('left', 'Amplitude', units='V')
-        self.plotWidget.setLabel('bottom', 'Time', units='s')
-        layout.addWidget(self.plotWidget)
+# pw.setLabel('bottom', 'Time', units='s')
+# pw.setXRange(0, 200)
+# pw.setYRange(0, 1e-10)
 
-        # Channels
-        self.channels_enabled = [True, True, True, True]
-        colors = ['y', 'c', 'm', 'g']
-        self.curves = []
-        self.buffers = []
-        self.bufferSize = 2_000_000  # 5 million samples
-        self.chunkSize = 1000      # New points per update
-        self.sample_rate = 100_000       # 1 MHz
-        self.timebase = np.linspace(-self.bufferSize / self.sample_rate, 0, self.bufferSize)
+def rand(n):
+    data = np.random.random(n)
+    data[int(n*0.1):int(n*0.13)] += .5
+    data[int(n*0.18)] += 2
+    data[int(n*0.1):int(n*0.13)] *= 5
+    data[int(n*0.18)] *= 20
+    data *= 1e-12
+    return data, np.arange(n, n+len(data)) / float(n)
+    
 
-        for i, color in enumerate(colors):
-            curve = self.plotWidget.plot(pen=pg.mkPen(color=color, width=1))
-            curve.setDownsampling("peak")
-            curve.setClipToView(True)
-            curve.setSkipFiniteCheck(True)
-            self.curves.append(curve)
-            self.buffers.append(np.zeros(self.bufferSize))
+def updateData():
+    # yd, xd = rand(1000_000)
+    xd = np.linspace(0, 100, 100_000)
+    yd = np.sin(xd) + np.random.normal(size=xd.shape) * 2
+    p1.setData(y=yd, x=xd)
+    yd2 = np.cos(xd) + np.random.normal(size=xd.shape) * 0.1
+    # p42.setData(y=yd2, x=xd)
+    # data2.setData((yd))
+    data1.setData(yd2)
 
-        # Trigger settings
-        self.trigger_level = 0.0
-        self.trigger_channel = 0
-        self.trigger_edge = 'rising'  # or 'falling'
+## Start a timer to rapidly update the plot in pw
+t = QtCore.QTimer()
+t.timeout.connect(updateData)
+t.start(50)
+#updateData()
 
-        # Control panel
-        controlLayout = QHBoxLayout()
-        layout.addLayout(controlLayout)
+## Multiple parameterized plots--we can autogenerate averages for these.
+for i in range(0, 5):
+    for j in range(0, 3):
+        yd, xd = rand(10000)
+        pw2.plot(y=yd*(j+1), x=xd, params={'iter': i, 'val': j})
 
-        self.startButton = QPushButton("Start")
-        self.startButton.setCheckable(True)
-        self.startButton.clicked.connect(self.toggle_running)
-        controlLayout.addWidget(self.startButton)
+## Test large numbers
+curve = pw3.plot(np.random.normal(size=10000)*1e0, clickable=True)
+curve.curve.setClickable(True)
+curve.setPen('w')  ## white pen
+curve.setShadowPen(pg.mkPen((70,70,30), width=6, cosmetic=True))
 
-        self.triggerLabel = QLabel(f"Trigger: CH{self.trigger_channel+1} @ {self.trigger_level:.2f}V ({self.trigger_edge})")
-        controlLayout.addWidget(self.triggerLabel)
+def clicked():
+    print("curve clicked")
+curve.sigClicked.connect(clicked)
 
-        # Channel checkboxes
-        for i in range(4):
-            cb = QCheckBox(f"CH{i+1}")
-            cb.setChecked(True)
-            cb.stateChanged.connect(lambda state, ch=i: self.toggle_channel(ch, state))
-            controlLayout.addWidget(cb)
-
-        controlLayout.addStretch()
-
-        # Timer for updates
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_plot)
-        self.running = False
-
-    def toggle_running(self, checked):
-        if checked:
-            self.startButton.setText("Stop")
-            self.running = True
-            self.timer.start(1)  # 100 Hz updates
-        else:
-            self.startButton.setText("Start")
-            self.running = False
-            self.timer.stop()
-
-    def toggle_channel(self, ch, state):
-        self.channels_enabled[ch] = bool(state)
-
-    def find_trigger(self, signal):
-        # Find trigger point (simple rising/falling edge)
-        if self.trigger_edge == 'rising':
-            crossings = np.where((signal[:-1] < self.trigger_level) & (signal[1:] >= self.trigger_level))[0]
-        else:
-            crossings = np.where((signal[:-1] > self.trigger_level) & (signal[1:] <= self.trigger_level))[0]
-
-        return crossings[0] if len(crossings) else 0
-
-    def min_max_downsample(self, data, target_points):
-        """Preserve spikes for oscilloscope look."""
-        factor = len(data) // target_points
-        if factor < 2:
-            return data  # No downsampling needed
-        reshaped = data[:factor * target_points].reshape(-1, factor)
-        mins = reshaped.min(axis=1)
-        maxs = reshaped.max(axis=1)
-        interleaved = np.empty(mins.size + maxs.size, dtype=mins.dtype)
-        interleaved[0::2] = mins
-        interleaved[1::2] = maxs
-        return interleaved
-
-    def update_plot(self):
-        # Simulate data streaming
-        t = np.arange(self.chunkSize) / self.sample_rate
-        for i in range(4):
-            new_data = np.sin(2 * np.pi * (5 + i*2) * t + np.random.uniform(0, np.pi)) \
-                       + np.random.normal(0, 0.1, size=self.chunkSize)
-            self.buffers[i] = np.roll(self.buffers[i], -self.chunkSize)
-            self.buffers[i][-self.chunkSize:] = new_data
-
-        # Trigger on selected channel
-        trig_idx = self.find_trigger(self.buffers[self.trigger_channel])
-        window_start = trig_idx
-        window_end = trig_idx + self.bufferSize
-        if window_end > len(self.buffers[0]):
-            window_end = len(self.buffers[0])
-            window_start = window_end - self.bufferSize
-
-        # Update curves with downsampling
-        view_width = self.plotWidget.getViewBox().width()
-        target_points = int(view_width) if view_width > 0 else 2000  # Approximate display width
-        for i, curve in enumerate(self.curves):
-            if self.channels_enabled[i]:
-                y_data = self.buffers[i][window_start:window_end]
-                y_ds = self.min_max_downsample(y_data, target_points)
-                x_ds = np.linspace(self.timebase[0], self.timebase[-1], len(y_ds))
-                curve.setData(x_ds, y_ds)
-            else:
-                curve.clear()
-
+lr = pg.LinearRegionItem([1, 30], bounds=[0,100], movable=True)
+pw3.addItem(lr)
+line = pg.InfiniteLine(angle=90, movable=True)
+pw3.addItem(line)
+line.setBounds([0,200])
 
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    scope = Oscilloscope()
-    scope.show()
-    sys.exit(app.exec())
+    pg.exec()
