@@ -1,11 +1,7 @@
 from __future__ import annotations
-from concurrent.futures import thread
-from email.policy import default
 import sys
-import enum
-import time
+import typing
 import markdown
-import threading
 from collections.abc import Callable
 from PyQt6.QtGui import QIcon, QAction, QDesktopServices, QKeySequence
 from PyQt6.QtCore import (
@@ -21,6 +17,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
+    QMenu,
     QWidget,
     QStackedWidget,
     QDockWidget,
@@ -294,6 +291,10 @@ class MainWindow(QMainWindow):
         self.controller.s_measurement_disabled.connect(self.toolbar.start_stop_button.setDisabled)
         self.controller.s_measurement_running.connect(self.on_update_start_stop_button)
         self.controller.s_show_view.connect(self.on_show_view)
+
+    @typing.override
+    def createPopupMenu(self) -> QMenu | None:
+        return None
 
     @pyqtSlot(bool)
     def on_update_start_stop_button(self, new_state:bool):
